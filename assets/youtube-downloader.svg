@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <title>YouTube Downloader — play and download</title>
+  <rect x="8" y="8" width="240" height="240" rx="58" fill="#1672df"/>
+  <rect x="37" y="57" width="182" height="131" rx="23" fill="#fff"/>
+  <path d="M68 86v69l52-34z" fill="#1672df"/>
+  <g fill="none" stroke="#1672df" stroke-width="13" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M165 89v58m-20-17 20 20 20-20"/>
+    <path d="M143 168h45" stroke-width="9"/>
+  </g>
+  <rect x="90" y="207" width="76" height="9" rx="4" fill="#abd2ff"/>
+</svg>

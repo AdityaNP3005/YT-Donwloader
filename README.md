@@ -4,6 +4,30 @@ Aplikasi desktop Windows untuk mengunduh video dengan suara, banyak link, dan pl
 
 ## Langsung pakai
 
+### Ubuntu / Linux
+
+Pasang dependensi sistem dengan `sudo apt install python3-tk python3-venv ffmpeg`.
+Sediakan Deno versi Linux di PATH atau `.tools/bin/deno`, lalu jalankan:
+
+```sh
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+./run.sh
+```
+
+Pada komputer Ubuntu ini dependensi tersebut sudah disiapkan. Aplikasi juga
+tersedia di menu aplikasi sebagai **YouTube Downloader**. Folder hasil bawaan
+adalah `~/Downloads/YouTube`. Untuk pengujian, gunakan
+`.venv/bin/python -m unittest discover -s tests -v` dan
+`.venv/bin/python tests/gui_smoke.py` dari sesi desktop.
+
+Untuk memasang ulang pintasan dan logo menu/dock setelah folder proyek dipindah,
+jalankan `./scripts/install-desktop.sh`. Logo yang sama juga tampil pada jendela
+aplikasi. Aset ikon sudah disertakan; Pillow hanya diperlukan jika ingin
+membangun ulang ikon melalui `python3 scripts/build_icons.py`.
+
+### Windows
+
 Python, Tkinter, yt-dlp, FFmpeg, FFprobe, dan Deno sudah disiapkan pada komputer ini. Klik dua kali **Autorun.bat** dari folder proyek untuk membuka aplikasi. Peluncur **Buka YouTube Downloader.bat** juga tetap bisa digunakan. Biarkan terminal peluncur tetap terbuka selama aplikasi digunakan.
 
 1. Paste satu atau beberapa link, **satu link per baris**. Link video dan playlist boleh dicampur.
@@ -31,7 +55,17 @@ Link `watch?v=...&list=...` secara default hanya menambahkan satu video. Aktifka
 
 Klik dua kali baris yang selesai untuk membuka file hasil dengan pemutar bawaan. MKV dapat memerlukan pemutar yang mendukung codec sumber, misalnya VLC.
 
-Kegagalan satu video tidak menghentikan video berikutnya. Video privat/dihapus akan ditandai gagal saat diketahui; video yang membutuhkan login, DRM, live, atau belum tayang tidak didukung.
+Ada jeda **10 detik antarvideo**, termasuk setelah percobaan yang gagal. Saat
+jeda, tombol Jeda dan penutupan aplikasi tetap merespons.
+
+Jika YouTube mengembalikan HTTP 429, pesan konfirmasi bot, atau pesan pembatasan
+permintaan yang dikenali, antrean **otomatis dijeda**. Video tersebut tetap
+berstatus menunggu, file parsial dan antrean disimpan, dan video berikutnya tidak
+dicoba. Tunggu sampai pembatasan mereda, lalu klik **Mulai unduh** untuk mencoba
+kembali. Tidak ada percobaan ulang otomatis untuk respons tersebut. Jeda ini
+mengurangi frekuensi permintaan, tetapi tidak menjamin bebas pembatasan YouTube.
+
+Kegagalan biasa pada satu video tidak menghentikan video berikutnya. Video privat/dihapus akan ditandai gagal saat diketahui; video yang membutuhkan login, DRM, live, atau belum tayang tidak didukung.
 
 Mengubah kualitas/folder berlaku untuk pekerjaan **menunggu dan terpilih**, bukan pekerjaan yang sudah aktif atau selesai. Resolusi aktual yang lebih rendah ditandai panah turun. Contoh: batas 1080p dan sumber maksimal 720p menghasilkan video 720p dengan suara.
 

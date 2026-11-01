@@ -3,11 +3,52 @@ import ctypes
 import json
 from pathlib import Path
 import sys
+import subprocess
 import tempfile
 import time
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app import App
+
+
+def capture(window, name):
+    if '--screenshots' not in sys.argv or not sys.platform.startswith('linux'):
+        return
+    window.update()
+    root = Path(__file__).resolve().parents[1]
+    subprocess.run(['/usr/bin/python3', str(root / 'scripts/capture_window.py'),
+                    str(window.winfo_id()), str(window.winfo_width()), str(window.winfo_height()),
+                    str(root / '.tools' / name)], check=True)
+
+
+def check_responsive_layout(window):
+    """Check that resizing reallocates controls without scrolling the page."""
+    for width, height in ((1400, 1000), (640, 620), (800, 720), (1400, 1000)):
+        window.geometry(f'{window.u(width)}x{window.u(height)}')
+        window.update()
+        assert window.winfo_width() == window.u(width)
+        assert window.winfo_height() == window.u(height)
+        if window.compact:
+            assert window.settings_panel.winfo_y() >= (window.composer_left.winfo_y()
+                                                        + window.composer_left.winfo_height())
+        else:
+            assert window.settings_panel.winfo_x() > window.composer_left.winfo_x()
+        for widget in (window.add_button, window.check_button, window.start_button,
+                       window.folder_entry, window.quality, window.tree, window.footer):
+            assert widget.winfo_ismapped()
+            assert widget.winfo_rootx() >= window.winfo_rootx()
+            assert widget.winfo_rootx() + widget.winfo_width() <= window.winfo_rootx() + window.winfo_width()
+            assert widget.winfo_rooty() + widget.winfo_height() <= window.winfo_rooty() + window.winfo_height()
+        assert window.tree.winfo_height() >= window.u(40)
+        assert window.folder_entry.winfo_width() > window.u(40)
+        assert window.add_button.winfo_width() >= window.add_button.winfo_reqwidth()
+        assert window.add_button.winfo_height() >= window.u(36)
+        if window.compact or height < 820:
+            assert window.queue_more.winfo_ismapped()
+            assert window.selection_more.winfo_ismapped()
+        capture(window, f'ui-resize-{width}x{height}.png')
+    assert int(window.links.cget('font').split()[-1]) > 0
 
 
 def main():
@@ -17,6 +58,23 @@ def main():
     with tempfile.TemporaryDirectory() as folder:
         cpu, started = time.process_time(), time.perf_counter()
         window = App(Path(folder) / 'state.json')
+        window.update()
+        assert window.winfo_class() == 'Youtubedownloader'
+        assert len(window.logo_images) == 4
+        assert window.empty_state.winfo_ismapped()
+        assert window.start_button.instate(['disabled'])
+        assert window.previous_button.instate(['disabled'])
+        assert window.next_button.instate(['disabled'])
+        check_responsive_layout(window)
+        capture(window, 'ui-empty.png')
+        with patch.object(window, 'clipboard_get', return_value='https://youtu.be/abcdefghijk'):
+            window.paste_links()
+        assert window.links.get('1.0', 'end-1c') == 'https://youtu.be/abcdefghijk'
+        window.links.delete('1.0', 'end')
+        window.playlist_toggle.invoke()
+        assert window.whole.get()
+        window.playlist_toggle.invoke()
+        assert not window.whole.get()
         window.withdraw()
         for number in range(1000):
             window.controller.add(f'https://www.youtube.com/watch?v={number:011d}',
@@ -35,11 +93,15 @@ def main():
         window.links.insert('1.0', 'https://www.youtube.com/watch?v=LRy-MMx2pvI\nhttps://www.youtube.com/playlist?list=PLcontoh')
         tick = time.perf_counter()
         window.render()
+        assert not window.empty_state.winfo_ismapped()
         render_ms = (time.perf_counter() - tick) * 1000
         window.update()
         assert len(window.tree.get_children()) == 100
+        assert window.next_button.instate(['!disabled'])
         window.turn_page(9)
         assert len(window.tree.get_children()) == 100 and window.page == 9
+        assert window.next_button.instate(['disabled'])
+        assert window.previous_button.instate(['!disabled'])
         window.turn_page(-9)
         window.controller.select_all(False)
         window.render()
@@ -49,6 +111,7 @@ def main():
         setup_seconds, setup_cpu = time.perf_counter() - started, time.process_time() - cpu
         window.deiconify()
         window.update()
+        capture(window, 'ui-queue.png')
         assert window.progress.winfo_ismapped()
         assert window.footer.winfo_rooty() + window.footer.winfo_height() <= window.winfo_rooty() + window.winfo_height()
         window.geometry('860x650')
@@ -56,15 +119,22 @@ def main():
         window.toggle_details()
         window.update()
         assert window.detail.winfo_ismapped()
+        assert not window.empty_state.winfo_ismapped()
         assert window.footer.winfo_rooty() + window.footer.winfo_height() <= window.winfo_rooty() + window.winfo_height()
+        capture(window, 'ui-details.png')
         window.toggle_details()
         window.geometry('1080x760')
         window.update()
-        handle = ctypes.windll.user32.GetAncestor(window.winfo_id(), 2)
-        bounds = ctypes.wintypes.RECT()
-        ctypes.windll.user32.GetWindowRect(handle, ctypes.byref(bounds))
-        (artifacts / 'ui-window.json').write_text(json.dumps({'hwnd': handle,
-            'width': bounds.right - bounds.left, 'height': bounds.bottom - bounds.top}), encoding='utf-8')
+        capture(window, 'ui-compact.png')
+        if sys.platform == 'win32':
+            handle = ctypes.windll.user32.GetAncestor(window.winfo_id(), 2)
+            bounds = ctypes.wintypes.RECT()
+            ctypes.windll.user32.GetWindowRect(handle, ctypes.byref(bounds))
+            geometry = {'hwnd': handle, 'width': bounds.right - bounds.left,
+                        'height': bounds.bottom - bounds.top}
+        else:
+            geometry = {'width': window.winfo_width(), 'height': window.winfo_height()}
+        (artifacts / 'ui-window.json').write_text(json.dumps(geometry), encoding='utf-8')
         delays = []
         last = [time.perf_counter()]
         idle_cpu, idle_started = time.process_time(), time.perf_counter()

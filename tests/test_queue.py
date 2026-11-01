@@ -28,15 +28,18 @@ class FakeEngine:
         self.release = threading.Event()
         self.calls = []
         self.fail = False
+        self.error_message = 'network error'
+        self.call_times = []
 
     def download(self, link, cap, folder, emit, cancel, job_id):
         self.calls.append(link)
+        self.call_times.append(time.monotonic())
         self.started.set()
         while not self.release.wait(0.01):
             if cancel.is_set():
                 raise Cancelled('cancelled')
         if self.fail and len(self.calls) == 1:
-            raise RuntimeError('network error')
+            raise RuntimeError(self.error_message)
         emit('selection', {'title': 'Video', 'height': 720, 'ext': 'mp4'})
         return Path(folder) / 'result.mp4'
 
@@ -45,7 +48,7 @@ class QueueTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.engine = FakeEngine()
-        self.controller = QueueController(Path(self.temp.name) / 'state.json', engine=self.engine)
+        self.controller = QueueController(Path(self.temp.name) / 'state.json', engine=self.engine, inter_video_delay=0)
 
     def tearDown(self):
         self.engine.release.set()
@@ -97,6 +100,58 @@ class QueueTests(unittest.TestCase):
         self.assertEqual(self.controller.get(first).status, 'pending')
         self.controller.start()
         wait_for(lambda: self.controller.get(first).status == 'done')
+
+    def test_delay_between_downloads(self):
+        self.controller.inter_video_delay = 0.2
+        self.engine.release.set()
+        self.controller.add(url(1))
+        second = self.controller.add(url(2))
+        self.controller.start()
+        wait_for(lambda: self.controller.get(second).status == 'done')
+        self.assertGreaterEqual(self.engine.call_times[1] - self.engine.call_times[0], 0.2)
+
+    def test_pause_interrupts_delay_and_resume_keeps_jobs(self):
+        self.controller.inter_video_delay = 0.15
+        self.engine.release.set()
+        self.controller.add(url(1))
+        second = self.controller.add(url(2))
+        self.controller.start()
+        wait_for(lambda: self.controller.waiting)
+        self.controller.pause()
+        time.sleep(0.2)
+        self.assertEqual(self.engine.calls, [url(1)])
+        self.assertEqual(self.controller.get(second).status, 'pending')
+        self.controller.start()
+        wait_for(lambda: self.controller.get(second).status == 'done')
+
+    def test_shutdown_does_not_wait_for_download_delay(self):
+        self.controller.inter_video_delay = 60
+        self.engine.release.set()
+        self.controller.add(url(1))
+        self.controller.add(url(2))
+        self.controller.start()
+        wait_for(lambda: self.controller.waiting)
+        started = time.monotonic()
+        self.controller.shutdown()
+        self.assertLess(time.monotonic() - started, 1)
+        self.assertEqual(self.engine.calls, [url(1)])
+
+    def test_restriction_pauses_queue_preserves_job_and_manual_resume(self):
+        self.engine.fail = True
+        self.engine.error_message = 'HTTP Error 429: Too Many Requests'
+        self.engine.release.set()
+        first, second = self.controller.add(url(1)), self.controller.add(url(2))
+        self.controller.start()
+        wait_for(lambda: bool(self.controller.notice))
+        self.assertFalse(self.controller.running)
+        self.assertEqual(self.engine.calls, [url(1)])
+        self.assertEqual(self.controller.get(first).status, 'pending')
+        self.assertEqual(self.controller.get(second).status, 'pending')
+        self.assertIn('429', self.controller.get(first).error)
+        self.assertEqual([j['status'] for j in self.controller.snapshot()['jobs']], ['pending', 'pending'])
+        self.controller.start()
+        wait_for(lambda: self.controller.get(second).status == 'done')
+        self.assertEqual(self.engine.calls, [url(1), url(1), url(2)])
 
     def test_cancellation_preserves_job_and_retry_identity(self):
         first = self.controller.add(url(1))

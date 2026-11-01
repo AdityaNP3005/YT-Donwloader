@@ -4,9 +4,10 @@ from dataclasses import asdict, dataclass, replace
 import json
 from pathlib import Path
 import threading
+import time
 import uuid
 
-from downloader import Cancelled, DownloadEngine, normalize_url
+from downloader import Cancelled, DownloadEngine, is_youtube_restriction, normalize_url
 
 
 ACTIVE = {'preparing', 'downloading', 'muxing', 'verifying'}
@@ -66,7 +67,7 @@ class Mailbox:
 
 
 class QueueController:
-    def __init__(self, state_path, engine=None, mailbox=None):
+    def __init__(self, state_path, engine=None, mailbox=None, inter_video_delay=10):
         self.path = Path(state_path)
         self.engine = engine if engine is not None else DownloadEngine()
         self.mailbox = mailbox if mailbox is not None else Mailbox()
@@ -79,6 +80,10 @@ class QueueController:
         self.closed = False
         self.active_id = None
         self.imports = 0
+        self.inter_video_delay = max(0, float(inter_video_delay))
+        self.next_download_at = 0.0
+        self.notice = ''
+        self.waiting = False
         self.cancel = threading.Event()
         self.dirty = threading.Event()
         self.stop_saver = threading.Event()
@@ -215,6 +220,7 @@ class QueueController:
 
     def start(self):
         with self.condition:
+            self.notice = ''
             self.running = bool(self.active_id or self.imports or any(j.selected and j.status == 'pending' for j in self.jobs))
             self.condition.notify_all()
             self.changed(False)
@@ -233,6 +239,10 @@ class QueueController:
     def pause(self):
         with self.condition:
             self.running = False
+            if self.waiting:
+                self.notice = ''
+            self.waiting = False
+            self.condition.notify_all()
             self.changed(False)
 
     def cancel_active(self):
@@ -268,6 +278,15 @@ class QueueController:
                     j.selected and j.status == 'pending' for j in self.jobs)))
                 if self.closed:
                     return
+                remaining = self.next_download_at - time.monotonic()
+                if remaining > 0:
+                    self.waiting = True
+                    self.notice = f'Jeda {self.inter_video_delay:g} detik antarvideo sebelum unduhan berikutnya.'
+                    self.changed(False)
+                    self.condition.wait(timeout=remaining)
+                    continue
+                self.waiting = False
+                self.notice = ''
                 job = next(j for j in self.jobs if j.selected and j.status == 'pending')
                 self.active_id, job.status = job.id, 'preparing'
                 job.error, job.percent = '', None
@@ -283,12 +302,22 @@ class QueueController:
                     job.status, job.error = ('pending' if self.closed else 'cancelled'), str(exc)
             except Exception as exc:
                 with self.condition:
-                    job.status, job.error = 'failed', str(exc)
+                    job.error = str(exc)
+                    if is_youtube_restriction(exc):
+                        job.status = 'pending'
+                        self.running = False
+                        self.notice = ('Antrean dijeda: YouTube membatasi permintaan atau meminta verifikasi. '
+                                       'Tunggu sebelum klik Mulai unduh untuk mencoba lagi.')
+                        self.mailbox.post('input', self.notice)
+                        self.mailbox.post('log', self.notice)
+                    else:
+                        job.status = 'failed'
                     self.mailbox.post('log', f'[{job.title}] {exc}')
             finally:
                 with self.condition:
                     job.speed, job.eta = None, None
                     self.active_id = None
+                    self.next_download_at = time.monotonic() + self.inter_video_delay
                     if not self.imports and not any(j.selected and j.status == 'pending' for j in self.jobs):
                         self.running = False
                     self.changed()

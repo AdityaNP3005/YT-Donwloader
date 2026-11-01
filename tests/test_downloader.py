@@ -1,5 +1,6 @@
 import copy
 import json
+import os
 from pathlib import Path
 import tempfile
 import threading
@@ -38,6 +39,28 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(d.parse_link(URL + '&list=PL123', True),
                          ('playlist', 'https://www.youtube.com/playlist?list=PL123'))
         self.assertEqual(d.parse_link('https://www.youtube.com/playlist?list=PL123')[0], 'playlist')
+
+    def test_restriction_detection_excludes_ordinary_download_errors(self):
+        for message in ('HTTP Error 429: Too Many Requests',
+                        "Sign in to confirm you’re not a bot",
+                        "This content isn't available, try again later", 'YouTube rate limit exceeded'):
+            with self.subTest(message=message):
+                self.assertTrue(d.is_youtube_restriction(RuntimeError(message)))
+        for message in ('HTTP Error 403: Forbidden', 'connection reset', 'Video unavailable',
+                        'Sign in to confirm your age', 'Private video'):
+            with self.subTest(message=message):
+                self.assertFalse(d.is_youtube_restriction(RuntimeError(message)))
+
+    def test_restriction_does_not_retry_streams_or_refresh_metadata(self):
+        engine = d.DownloadEngine()
+        with tempfile.TemporaryDirectory() as folder, \
+                patch('downloader.tools_required', return_value={}), \
+                patch.object(engine, 'metadata', return_value=info()) as metadata, \
+                patch.object(engine, '_streams', side_effect=RuntimeError('HTTP Error 429')) as streams:
+            with self.assertRaisesRegex(d.AppError, '429'):
+                engine.download(URL, 1080, folder, lambda *_: None)
+            self.assertEqual(streams.call_count, 1)
+            self.assertEqual(metadata.call_count, 1)
 
     def test_invalid_urls(self):
         for url in ('', 'file:///abcdefghijk', 'https://youtube.com.evil.test/watch?v=abcdefghijk',
@@ -181,7 +204,7 @@ class EngineTests(unittest.TestCase):
 
     def test_local_tools_and_actionable_missing_error(self):
         with patch('downloader.Path.is_file', return_value=True), patch('downloader.shutil.which') as which:
-            self.assertEqual(Path(d.find_tool('deno')).name, 'deno.exe')
+            self.assertEqual(Path(d.find_tool('deno')).name, 'deno.exe' if os.name == 'nt' else 'deno')
             which.assert_not_called()
         with patch('downloader.find_tool', return_value=None), self.assertRaisesRegex(d.AppError, 'README'):
             d.tools_required()

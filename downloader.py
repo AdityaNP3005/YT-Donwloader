@@ -23,6 +23,14 @@ class Cancelled(AppError):
     pass
 
 
+def is_youtube_restriction(error):
+    """Recognize explicit rate-limit/bot responses, not unrelated 403 failures."""
+    message = str(error).lower().replace('’', "'")
+    return bool(re.search(r'\b429\b|too many requests|rate[ -]?limit', message)
+                or re.search(r"(?:sign in|confirm).*?(?:not a bot|aren't a bot|not a robot)", message)
+                or "this content isn't available, try again later" in message)
+
+
 def check_cancel(cancel):
     if cancel is not None and cancel.is_set():
         raise Cancelled('Dibatalkan. File parsial disimpan untuk dicoba lagi.')
@@ -63,7 +71,7 @@ def normalize_url(value):
 
 
 def find_tool(name):
-    local = Path(__file__).resolve().parent / '.tools' / 'bin' / f'{name}.exe'
+    local = Path(__file__).resolve().parent / '.tools' / 'bin' / (f'{name}.exe' if os.name == 'nt' else name)
     return str(local) if local.is_file() else shutil.which(name)
 
 
@@ -337,7 +345,7 @@ class DownloadEngine:
                     break
                 except Exception as exc:
                     check_cancel(cancel)
-                    if attempt:
+                    if attempt or is_youtube_restriction(exc):
                         raise
                     if is_refresh_error(exc):
                         emit('log', 'URL stream ditolak/kedaluwarsa; memperbarui metadata sekali.')
